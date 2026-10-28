@@ -1,0 +1,873 @@
+diff --git a/Controllers/ENESMBusController/XPGSpectrixS40GDetect_Linux.cpp b/Controllers/ENESMBusController/XPGSpectrixS40GDetect_Linux.cpp
+index 1fb0f2d..5ff254a 100644
+--- a/Controllers/ENESMBusController/XPGSpectrixS40GDetect_Linux.cpp
++++ b/Controllers/ENESMBusController/XPGSpectrixS40GDetect_Linux.cpp
+@@ -1,7 +1,7 @@
+ /*---------------------------------------------------------*\
+ | XPGSpectrixS40GDetect_Linux.cpp                           |
+ |                                                           |
+-|   Detector for XPG Spectrix S40G (Linux)                  |
++|   Detector for XPG Spectrix S40G and S20G (Linux)         |
+ |                                                           |
+ |   This file is part of the OpenRGB project                |
+ |   SPDX-License-Identifier: GPL-2.0-or-later               |
+@@ -11,6 +11,7 @@
+ #include <fcntl.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include <unistd.h>
+ #include <vector>
+ #include "DetectionManager.h"
+@@ -20,28 +21,21 @@
+ #include "RGBController.h"
+ #include "RGBController_ENESMBus.h"
+ 
+-DetectedControllers DetectSpectrixS40GControllers()
++static DetectedControllers DetectSpectrixControllers(const char* model, const char* name)
+ {
+     DetectedControllers detected_controllers;
+ 
+     /*-----------------------------------------------------*\
+-    | Search for /dev/nvmeX nodes with model matching       |
+-    | "XPG SPECTRIX S40G"                                   |
++    | Search for /dev/nvmeX nodes with the given model      |
+     \*-----------------------------------------------------*/
+     unsigned int        nvme_idx = 0;
+ 
+     while(1)
+     {
+-        /*-------------------------------------------------*\
+-        | Create the nvme class model path                  |
+-        \*-------------------------------------------------*/
+         char nvme_dev_buf[1024];
+ 
+         snprintf(nvme_dev_buf, 1024, "/sys/class/nvme/nvme%d/model", nvme_idx);
+ 
+-        /*-------------------------------------------------*\
+-        | Open the input event path to get the name         |
+-        \*-------------------------------------------------*/
+         int nvme_model_fd = open(nvme_dev_buf, O_RDONLY|O_NONBLOCK);
+ 
+         if(nvme_model_fd < 0)
+@@ -51,21 +45,21 @@ DetectedControllers DetectSpectrixS40GControllers()
+ 
+         memset(nvme_dev_buf, 0, 1024);
+ 
+-        if(read(nvme_model_fd, nvme_dev_buf, 1024) < 0)
++        if(read(nvme_model_fd, nvme_dev_buf, 1023) < 0)
+         {
+-            LOG_WARNING("[XPG Spectrix S40G] Probing %d, failed to read NVMe model", nvme_idx);
++            LOG_WARNING("[%s] Probing %d, failed to read NVMe model", name, nvme_idx);
+         }
+         else
+         {
+-            LOG_DEBUG("[XPG Spectrix S40G] Probing %d, model: %s", nvme_idx, nvme_dev_buf);
++            LOG_DEBUG("[%s] Probing %d, model: %s", name, nvme_idx, nvme_dev_buf);
+         }
+ 
+         close(nvme_model_fd);
+ 
+         /*-------------------------------------------------*\
+-        | Check if this NVMe device is a SPECTRIX S40G      |
++        | Check if this NVMe device matches the model       |
+         \*-------------------------------------------------*/
+-        if(strncmp(nvme_dev_buf, "XPG SPECTRIX S40G", 17) == 0)
++        if(strncmp(nvme_dev_buf, model, strlen(model)) == 0)
+         {
+             snprintf(nvme_dev_buf, 1024, "/dev/nvme%d", nvme_idx);
+ 
+@@ -74,7 +68,7 @@ DetectedControllers DetectSpectrixS40GControllers()
+             if(nvme_fd > 0)
+             {
+                 ENESMBusInterface_SpectrixS40G* interface      = new ENESMBusInterface_SpectrixS40G(nvme_fd, nvme_dev_buf);
+-                ENESMBusController*             controller     = new ENESMBusController(interface, 0x67, "XPG Spectrix S40G", DEVICE_TYPE_STORAGE);
++                ENESMBusController*             controller     = new ENESMBusController(interface, 0x67, name, DEVICE_TYPE_STORAGE);
+                 RGBController_ENESMBus*         rgb_controller = new RGBController_ENESMBus(controller);
+ 
+                 detected_controllers.push_back(rgb_controller);
+@@ -87,4 +81,15 @@ DetectedControllers DetectSpectrixS40GControllers()
+     return(detected_controllers);
+ }
+ 
+-REGISTER_DETECTOR(    "XPG Spectrix S40G",              DetectSpectrixS40GControllers);
++DetectedControllers DetectSpectrixS20GControllers()
++{
++    return(DetectSpectrixControllers("XPG SPECTRIX S20G", "XPG Spectrix S20G"));
++}
++
++DetectedControllers DetectSpectrixS40GControllers()
++{
++    return(DetectSpectrixControllers("XPG SPECTRIX S40G", "XPG Spectrix S40G"));
++}
++
++REGISTER_DETECTOR("XPG Spectrix S20G", DetectSpectrixS20GControllers);
++REGISTER_DETECTOR("XPG Spectrix S40G", DetectSpectrixS40GControllers);
+diff --git a/Controllers/PichauAurumController/PichauAurumController.cpp b/Controllers/PichauAurumController/PichauAurumController.cpp
+new file mode 100644
+index 0000000..0d79737
+--- /dev/null
++++ b/Controllers/PichauAurumController/PichauAurumController.cpp
+@@ -0,0 +1,270 @@
++/*---------------------------------------------------------*\
++| PichauAurumController.cpp                                 |
++|                                                           |
++|   Driver for Pichau Aurum keyboards (SDCINNOVATION        |
++|   36AE:FE9C), lighting interface 2                        |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-3.0-only                   |
++\*---------------------------------------------------------*/
++
++#include <chrono>
++#include <cstring>
++#include "LogManager.h"
++#include "PichauAurumController.h"
++#include "StringUtils.h"
++
++using namespace std::chrono_literals;
++
++#define PICHAU_AURUM_CMD_PREFIX         0x06
++#define PICHAU_AURUM_CMD_GET_CURRENT    0x0A
++#define PICHAU_AURUM_CMD_SET_MODE       0x0B
++#define PICHAU_AURUM_CMD_GET_MODE       0x16
++#define PICHAU_AURUM_REPLY_PREFIX       0xAA
++#define PICHAU_AURUM_SETTINGS_OFFSET    7
++#define PICHAU_AURUM_SETTINGS_LENGTH    9
++
++/*---------------------------------------------------------*\
++| Time without changes before a write goes to the keyboard  |
++\*---------------------------------------------------------*/
++#define PICHAU_AURUM_WRITE_DELAY        400ms
++
++bool PichauAurumModeSettings::operator==(const PichauAurumModeSettings& o) const
++{
++    return(memcmp(this, &o, sizeof(PichauAurumModeSettings)) == 0);
++}
++
++static void SettingsToBytes(const PichauAurumModeSettings& s, unsigned char* out)
++{
++    out[0] = s.mode;
++    out[1] = s.brightness;
++    out[2] = s.speed;
++    out[3] = s.direction;
++    out[4] = s.mono;
++    out[5] = s.reserved;
++    out[6] = s.hue;
++    out[7] = s.saturation;
++    out[8] = s.value;
++}
++
++PichauAurumController::PichauAurumController(hid_device* dev_handle, const char* path, std::string dev_name)
++{
++    dev                 = dev_handle;
++    location            = path;
++    name                = dev_name;
++    pending_valid       = false;
++    stop_writer         = false;
++    last_written_valid  = false;
++    memset(&pending, 0, sizeof(pending));
++    memset(&last_written, 0, sizeof(last_written));
++
++    writer_thread       = std::thread(&PichauAurumController::WriterThread, this);
++}
++
++PichauAurumController::~PichauAurumController()
++{
++    {
++        std::lock_guard<std::mutex> lock(pending_mutex);
++        stop_writer = true;
++    }
++    pending_cv.notify_all();
++    writer_thread.join();
++
++    hid_close(dev);
++}
++
++std::string PichauAurumController::GetDeviceLocation()
++{
++    return("HID: " + location);
++}
++
++std::string PichauAurumController::GetNameString()
++{
++    return(name);
++}
++
++std::string PichauAurumController::GetSerialString()
++{
++    wchar_t serial_string[128];
++    int ret = hid_get_serial_number_string(dev, serial_string, 128);
++
++    if(ret != 0)
++    {
++        return("");
++    }
++
++    return(StringUtils::wstring_to_string(serial_string));
++}
++
++/*---------------------------------------------------------*\
++| Sends a 64-byte command (no report ID) and waits for the  |
++| reply that starts with AA <expect>. Retries up to 3 times |
++| because the keyboard drops commands when busy.            |
++\*---------------------------------------------------------*/
++bool PichauAurumController::Command(const unsigned char* data, int length, unsigned char expect, unsigned char* reply)
++{
++    std::lock_guard<std::mutex> lock(hid_mutex);
++
++    unsigned char buf[PICHAU_AURUM_REPORT_SIZE + 1];
++
++    memset(buf, 0, sizeof(buf));
++    memcpy(&buf[1], data, length);
++
++    for(int attempt = 0; attempt < 3; attempt++)
++    {
++        if(hid_write(dev, buf, sizeof(buf)) < 0)
++        {
++            continue;
++        }
++
++        for(int read = 0; read < 8; read++)
++        {
++            int ret = hid_read_timeout(dev, reply, PICHAU_AURUM_REPORT_SIZE, 500);
++
++            if(ret <= 0)
++            {
++                break;
++            }
++
++            if(reply[0] == PICHAU_AURUM_REPLY_PREFIX && reply[1] == expect)
++            {
++                return(true);
++            }
++        }
++    }
++
++    LOG_WARNING("[%s] No reply from keyboard to command %02X", name.c_str(), data[1]);
++    return(false);
++}
++
++bool PichauAurumController::ReadCurrentMode(unsigned char* mode)
++{
++    unsigned char cmd[]   = { PICHAU_AURUM_CMD_PREFIX, PICHAU_AURUM_CMD_GET_CURRENT };
++    unsigned char reply[PICHAU_AURUM_REPORT_SIZE];
++
++    if(!Command(cmd, sizeof(cmd), PICHAU_AURUM_CMD_GET_CURRENT, reply))
++    {
++        return(false);
++    }
++
++    *mode = reply[PICHAU_AURUM_SETTINGS_OFFSET];
++    return(true);
++}
++
++bool PichauAurumController::ReadModeSettings(unsigned char mode, PichauAurumModeSettings* settings)
++{
++    unsigned char cmd[]   = { PICHAU_AURUM_CMD_PREFIX, PICHAU_AURUM_CMD_GET_MODE, 0x00, 0x00, 0x00, 0x01, 0x00, mode };
++    unsigned char reply[PICHAU_AURUM_REPORT_SIZE];
++
++    if(!Command(cmd, sizeof(cmd), PICHAU_AURUM_CMD_GET_MODE, reply))
++    {
++        return(false);
++    }
++
++    const unsigned char* s = &reply[PICHAU_AURUM_SETTINGS_OFFSET];
++
++    if(s[0] != mode)
++    {
++        LOG_WARNING("[%s] Settings reply for mode %d came back for mode %d", name.c_str(), mode, s[0]);
++        return(false);
++    }
++
++    settings->mode       = s[0];
++    settings->brightness = s[1];
++    settings->speed      = s[2];
++    settings->direction  = s[3];
++    settings->mono       = s[4];
++    settings->reserved   = s[5];
++    settings->hue        = s[6];
++    settings->saturation = s[7];
++    settings->value      = s[8];
++
++    return(true);
++}
++
++bool PichauAurumController::WriteModeSettings(const PichauAurumModeSettings& settings)
++{
++    unsigned char cmd[PICHAU_AURUM_SETTINGS_OFFSET + PICHAU_AURUM_SETTINGS_LENGTH] =
++        { PICHAU_AURUM_CMD_PREFIX, PICHAU_AURUM_CMD_SET_MODE, 0x0B, 0x00, 0x00, 0x01, 0x00 };
++    unsigned char reply[PICHAU_AURUM_REPORT_SIZE];
++
++    SettingsToBytes(settings, &cmd[PICHAU_AURUM_SETTINGS_OFFSET]);
++
++    if(!Command(cmd, sizeof(cmd), PICHAU_AURUM_CMD_SET_MODE, reply))
++    {
++        return(false);
++    }
++
++    /*-----------------------------------------------------*\
++    | The keyboard echoes the settings it accepted          |
++    \*-----------------------------------------------------*/
++    if(memcmp(&reply[PICHAU_AURUM_SETTINGS_OFFSET], &cmd[PICHAU_AURUM_SETTINGS_OFFSET], PICHAU_AURUM_SETTINGS_LENGTH) != 0)
++    {
++        LOG_WARNING("[%s] Keyboard did not accept mode %d settings", name.c_str(), settings.mode);
++        return(false);
++    }
++
++    return(true);
++}
++
++void PichauAurumController::QueueModeSettings(const PichauAurumModeSettings& settings)
++{
++    {
++        std::lock_guard<std::mutex> lock(pending_mutex);
++        pending       = settings;
++        pending_valid = true;
++    }
++    pending_cv.notify_all();
++}
++
++void PichauAurumController::WriterThread()
++{
++    std::unique_lock<std::mutex> lock(pending_mutex);
++
++    while(!stop_writer)
++    {
++        pending_cv.wait(lock, [this]{ return(stop_writer || pending_valid); });
++
++        if(stop_writer)
++        {
++            break;
++        }
++
++        /*-------------------------------------------------*\
++        | Wait until no new settings arrive for the delay   |
++        \*-------------------------------------------------*/
++        PichauAurumModeSettings snapshot = pending;
++
++        while(!stop_writer && pending_cv.wait_for(lock, PICHAU_AURUM_WRITE_DELAY, [&]{ return(stop_writer || !(pending == snapshot)); }))
++        {
++            snapshot = pending;
++        }
++
++        pending_valid = false;
++
++        if(last_written_valid && snapshot == last_written)
++        {
++            continue;
++        }
++
++        lock.unlock();
++        bool ok = WriteModeSettings(snapshot);
++        lock.lock();
++
++        if(ok)
++        {
++            last_written       = snapshot;
++            last_written_valid = true;
++        }
++    }
++
++    /*-----------------------------------------------------*\
++    | Flush a write still pending at shutdown               |
++    \*-----------------------------------------------------*/
++    if(pending_valid && !(last_written_valid && pending == last_written))
++    {
++        PichauAurumModeSettings snapshot = pending;
++        lock.unlock();
++        WriteModeSettings(snapshot);
++    }
++}
+diff --git a/Controllers/PichauAurumController/PichauAurumController.h b/Controllers/PichauAurumController/PichauAurumController.h
+new file mode 100644
+index 0000000..76a0362
+--- /dev/null
++++ b/Controllers/PichauAurumController/PichauAurumController.h
+@@ -0,0 +1,106 @@
++/*---------------------------------------------------------*\
++| PichauAurumController.h                                   |
++|                                                           |
++|   Driver for Pichau Aurum keyboards (SDCINNOVATION        |
++|   36AE:FE9C), lighting interface 2                        |
++|                                                           |
++|   Protocol documented by the OpenAurum project            |
++|   (github.com/its-danilo/openaurum), captured from the    |
++|   official Windows software.                              |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-3.0-only                   |
++\*---------------------------------------------------------*/
++
++#pragma once
++
++#include <condition_variable>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <hidapi.h>
++
++#define PICHAU_AURUM_REPORT_SIZE    64
++#define PICHAU_AURUM_MODE_COUNT     16      /* 0 (off) .. 15; 16 (per-key) not exposed */
++
++enum
++{
++    PICHAU_AURUM_MODE_OFF           = 0,
++    PICHAU_AURUM_MODE_STATIC        = 1,
++    PICHAU_AURUM_MODE_BREATH        = 2,
++    PICHAU_AURUM_MODE_SPIN          = 3,
++    PICHAU_AURUM_MODE_COLOR_LOOP    = 4,
++    PICHAU_AURUM_MODE_STREAM        = 5,
++    PICHAU_AURUM_MODE_BLOOM         = 6,
++    PICHAU_AURUM_MODE_UD_WAVE       = 7,
++    PICHAU_AURUM_MODE_CROSS         = 8,
++    PICHAU_AURUM_MODE_RAIN          = 9,
++    PICHAU_AURUM_MODE_METEOR        = 10,
++    PICHAU_AURUM_MODE_TRIG_SPREAD   = 11,
++    PICHAU_AURUM_MODE_TRIG_SPREAD_R = 12,
++    PICHAU_AURUM_MODE_TRIG_SINGLE   = 13,
++    PICHAU_AURUM_MODE_SUDOKU        = 14,
++    PICHAU_AURUM_MODE_TIDE          = 15,
++};
++
++/*---------------------------------------------------------*\
++| Settings block stored by the keyboard for each mode.      |
++| Same layout in the 06 16 reply and the 06 0B command,     |
++| starting at byte 7.                                       |
++\*---------------------------------------------------------*/
++struct PichauAurumModeSettings
++{
++    unsigned char mode;
++    unsigned char brightness;   /* 0..4                              */
++    unsigned char speed;        /* 0..2                              */
++    unsigned char direction;    /* kept as read from the keyboard    */
++    unsigned char mono;         /* 1 = single color, 0 = RGB         */
++    unsigned char reserved;     /* unknown, kept as read             */
++    unsigned char hue;
++    unsigned char saturation;
++    unsigned char value;
++
++    bool operator==(const PichauAurumModeSettings& o) const;
++};
++
++class PichauAurumController
++{
++public:
++    PichauAurumController(hid_device* dev_handle, const char* path, std::string dev_name);
++    ~PichauAurumController();
++
++    std::string GetDeviceLocation();
++    std::string GetNameString();
++    std::string GetSerialString();
++
++    bool        ReadCurrentMode(unsigned char* mode);
++    bool        ReadModeSettings(unsigned char mode, PichauAurumModeSettings* settings);
++
++    /*-----------------------------------------------------*\
++    | The keyboard writes every change to flash. Writes are |
++    | deferred until the settings stop changing (e.g. while |
++    | dragging a color picker) and skipped when identical   |
++    | to the last write.                                    |
++    \*-----------------------------------------------------*/
++    void        QueueModeSettings(const PichauAurumModeSettings& settings);
++
++private:
++    hid_device*             dev;
++    std::string             location;
++    std::string             name;
++
++    std::mutex              hid_mutex;
++
++    std::thread             writer_thread;
++    std::mutex              pending_mutex;
++    std::condition_variable pending_cv;
++    bool                    pending_valid;
++    bool                    stop_writer;
++    PichauAurumModeSettings pending;
++    PichauAurumModeSettings last_written;
++    bool                    last_written_valid;
++
++    bool        Command(const unsigned char* data, int length, unsigned char expect, unsigned char* reply);
++    bool        WriteModeSettings(const PichauAurumModeSettings& settings);
++    void        WriterThread();
++};
+diff --git a/Controllers/PichauAurumController/PichauAurumControllerDetect.cpp b/Controllers/PichauAurumController/PichauAurumControllerDetect.cpp
+new file mode 100644
+index 0000000..a3374fc
+--- /dev/null
++++ b/Controllers/PichauAurumController/PichauAurumControllerDetect.cpp
+@@ -0,0 +1,38 @@
++/*---------------------------------------------------------*\
++| PichauAurumControllerDetect.cpp                           |
++|                                                           |
++|   Detector for Pichau Aurum keyboards                     |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-3.0-only                   |
++\*---------------------------------------------------------*/
++
++#include <hidapi.h>
++#include "DetectionManager.h"
++#include "PichauAurumController.h"
++#include "RGBController_PichauAurum.h"
++
++#define SDCINNOVATION_VID           0x36AE
++#define PICHAU_AURUM_PID            0xFE9C
++#define PICHAU_AURUM_INTERFACE      2
++#define PICHAU_AURUM_USAGE_PAGE     0xFF00
++
++DetectedControllers DetectPichauAurumKeyboards(hid_device_info* info, const std::string& name)
++{
++    DetectedControllers detected_controllers;
++    hid_device*         dev;
++
++    dev = hid_open_path(info->path);
++
++    if(dev)
++    {
++        PichauAurumController*      controller     = new PichauAurumController(dev, info->path, name);
++        RGBController_PichauAurum*  rgb_controller = new RGBController_PichauAurum(controller);
++
++        detected_controllers.push_back(rgb_controller);
++    }
++
++    return(detected_controllers);
++}
++
++REGISTER_HID_DETECTOR_IP("Pichau Aurum Keyboard", DetectPichauAurumKeyboards, SDCINNOVATION_VID, PICHAU_AURUM_PID, PICHAU_AURUM_INTERFACE, PICHAU_AURUM_USAGE_PAGE);
+diff --git a/Controllers/PichauAurumController/RGBController_PichauAurum.cpp b/Controllers/PichauAurumController/RGBController_PichauAurum.cpp
+new file mode 100644
+index 0000000..2e58aca
+--- /dev/null
++++ b/Controllers/PichauAurumController/RGBController_PichauAurum.cpp
+@@ -0,0 +1,292 @@
++/*---------------------------------------------------------*\
++| RGBController_PichauAurum.cpp                             |
++|                                                           |
++|   RGBController for Pichau Aurum keyboards                |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-3.0-only                   |
++\*---------------------------------------------------------*/
++
++#include <algorithm>
++#include <cmath>
++#include <cstring>
++#include "RGBController_PichauAurum.h"
++
++/**------------------------------------------------------------------*\
++    @name Pichau Aurum
++    @category Keyboard
++    @type USB
++    @save :white_check_mark:
++    @direct :x:
++    @effects :white_check_mark:
++    @detectors DetectPichauAurumKeyboards
++    @comment Effects run on the keyboard. Every change is written to
++        the keyboard flash, so updates are delayed until settings stop
++        changing. Per-key colors are not supported yet.
++\*-------------------------------------------------------------------*/
++
++#define PICHAU_AURUM_BRIGHTNESS_STEPS   10      /* UI scale                     */
++#define PICHAU_AURUM_HW_BRIGHTNESS_MAX  4       /* keyboard brightness byte     */
++#define PICHAU_AURUM_SPEED_MAX          2
++
++struct PichauAurumModeInfo
++{
++    const char*     name;
++    unsigned char   value;
++    bool            single_color;   /* supports a user-chosen color     */
++    unsigned char   mono_min;       /* lowest visible value in mono     */
++};
++
++/*---------------------------------------------------------*\
++| In single-color mode the firmware ignores its brightness  |
++| byte, so brightness is applied to the color value. The    |
++| minimum visible value differs per effect.                 |
++\*---------------------------------------------------------*/
++static const PichauAurumModeInfo mode_info[] =
++{
++    { "Off",                    PICHAU_AURUM_MODE_OFF,           false, 0  },
++    { "Static",                 PICHAU_AURUM_MODE_STATIC,        true,  12 },
++    { "Breathing",              PICHAU_AURUM_MODE_BREATH,        true,  35 },
++    { "Spin",                   PICHAU_AURUM_MODE_SPIN,          false, 0  },
++    { "Color Cycle",            PICHAU_AURUM_MODE_COLOR_LOOP,    false, 0  },
++    { "Stream",                 PICHAU_AURUM_MODE_STREAM,        true,  35 },
++    { "Bloom",                  PICHAU_AURUM_MODE_BLOOM,         true,  16 },
++    { "Up-Down Wave",           PICHAU_AURUM_MODE_UD_WAVE,       true,  16 },
++    { "Cross",                  PICHAU_AURUM_MODE_CROSS,         true,  16 },
++    { "Rain",                   PICHAU_AURUM_MODE_RAIN,          true,  12 },
++    { "Meteor",                 PICHAU_AURUM_MODE_METEOR,        true,  35 },
++    { "Reactive Spread",        PICHAU_AURUM_MODE_TRIG_SPREAD,   true,  16 },
++    { "Reactive Spread Reverse",PICHAU_AURUM_MODE_TRIG_SPREAD_R, true,  16 },
++    { "Reactive",               PICHAU_AURUM_MODE_TRIG_SINGLE,   true,  12 },
++    { "Sudoku",                 PICHAU_AURUM_MODE_SUDOKU,        true,  12 },
++    { "Tide",                   PICHAU_AURUM_MODE_TIDE,          true,  35 },
++};
++
++static void RGBToHSV(RGBColor color, unsigned char* h, unsigned char* s, unsigned char* v)
++{
++    double r  = RGBGetRValue(color) / 255.0;
++    double g  = RGBGetGValue(color) / 255.0;
++    double b  = RGBGetBValue(color) / 255.0;
++    double mx = std::max({ r, g, b });
++    double mn = std::min({ r, g, b });
++    double d  = mx - mn;
++    double hue = 0.0;
++
++    if(d > 0.0)
++    {
++        if(mx == r)      hue = std::fmod((g - b) / d, 6.0);
++        else if(mx == g) hue = (b - r) / d + 2.0;
++        else             hue = (r - g) / d + 4.0;
++        hue /= 6.0;
++        if(hue < 0.0)    hue += 1.0;
++    }
++
++    *h = (unsigned char)((int)std::lround(hue * 255.0) % 256);
++    *s = (unsigned char)std::lround(mx > 0.0 ? (d / mx) * 255.0 : 0.0);
++    *v = (unsigned char)std::lround(mx * 255.0);
++}
++
++static RGBColor HSVToRGB(unsigned char h, unsigned char s, unsigned char v)
++{
++    double hue = (h / 255.0) * 6.0;
++    double sat = s / 255.0;
++    double val = v / 255.0;
++    int    i   = (int)std::floor(hue) % 6;
++    double f   = hue - std::floor(hue);
++    double p   = val * (1.0 - sat);
++    double q   = val * (1.0 - f * sat);
++    double t   = val * (1.0 - (1.0 - f) * sat);
++    double r = 0, g = 0, b = 0;
++
++    switch(i)
++    {
++        case 0: r = val; g = t;   b = p;   break;
++        case 1: r = q;   g = val; b = p;   break;
++        case 2: r = p;   g = val; b = t;   break;
++        case 3: r = p;   g = q;   b = val; break;
++        case 4: r = t;   g = p;   b = val; break;
++        default:r = val; g = p;   b = q;   break;
++    }
++
++    return(ToRGBColor((unsigned char)std::lround(r * 255), (unsigned char)std::lround(g * 255), (unsigned char)std::lround(b * 255)));
++}
++
++/*---------------------------------------------------------*\
++| Maps UI brightness 1..10 to a color value between the     |
++| effect's minimum visible value and 255 (perceptual curve) |
++\*---------------------------------------------------------*/
++static unsigned char MonoLevel(unsigned char mono_min, unsigned int level)
++{
++    if(level == 0 || mono_min == 0)
++    {
++        return(level == 0 ? 0 : 255);
++    }
++
++    double exponent = (double)(level - 1) / (PICHAU_AURUM_BRIGHTNESS_STEPS - 1);
++    return((unsigned char)std::lround(mono_min * std::pow(255.0 / mono_min, exponent)));
++}
++
++RGBController_PichauAurum::RGBController_PichauAurum(PichauAurumController* controller_ptr)
++{
++    controller              = controller_ptr;
++
++    name                    = controller->GetNameString();
++    vendor                  = "Pichau";
++    type                    = DEVICE_TYPE_KEYBOARD;
++    description             = "Pichau Aurum Keyboard (SDCINNOVATION 36AE:FE9C)";
++    location                = controller->GetDeviceLocation();
++    serial                  = controller->GetSerialString();
++
++    unsigned char current_mode = PICHAU_AURUM_MODE_STATIC;
++
++    for(const PichauAurumModeInfo& info : mode_info)
++    {
++        /*-------------------------------------------------*\
++        | Start from what the keyboard has stored, so the   |
++        | unknown bytes (direction, reserved) are preserved |
++        \*-------------------------------------------------*/
++        PichauAurumModeSettings& s = stored[info.value];
++
++        if(!controller->ReadModeSettings(info.value, &s))
++        {
++            s            = { info.value, 3, 1, 1, (unsigned char)(info.single_color ? 1 : 0), 0xFF, 0, 255, 255 };
++        }
++
++        mode m;
++        m.name              = info.name;
++        m.value             = info.value;
++        m.flags             = MODE_FLAG_AUTOMATIC_SAVE;
++        m.color_mode        = MODE_COLORS_NONE;
++
++        if(info.value != PICHAU_AURUM_MODE_OFF)
++        {
++            m.flags        |= MODE_FLAG_HAS_SPEED | MODE_FLAG_HAS_BRIGHTNESS;
++            m.speed_min     = 0;
++            m.speed_max     = PICHAU_AURUM_SPEED_MAX;
++            m.speed         = std::min<unsigned int>(s.speed, PICHAU_AURUM_SPEED_MAX);
++            m.brightness_min= 0;
++            m.brightness_max= PICHAU_AURUM_BRIGHTNESS_STEPS;
++            m.brightness    = (unsigned int)std::lround(s.brightness * (double)PICHAU_AURUM_BRIGHTNESS_STEPS / PICHAU_AURUM_HW_BRIGHTNESS_MAX);
++        }
++
++        if(info.single_color && s.mono)
++        {
++            /*---------------------------------------------*\
++            | In single-color mode the visible brightness   |
++            | is the color value, not the brightness byte:  |
++            | pick the level whose value is closest to it   |
++            \*---------------------------------------------*/
++            unsigned int best = PICHAU_AURUM_BRIGHTNESS_STEPS;
++            int          diff = 256;
++
++            for(unsigned int level = 0; level <= PICHAU_AURUM_BRIGHTNESS_STEPS; level++)
++            {
++                int d = std::abs((int)MonoLevel(info.mono_min, level) - (int)s.value);
++                if(d < diff)
++                {
++                    diff = d;
++                    best = level;
++                }
++            }
++
++            m.brightness    = best;
++        }
++
++        if(info.single_color)
++        {
++            m.flags        |= MODE_FLAG_HAS_MODE_SPECIFIC_COLOR | MODE_FLAG_HAS_RANDOM_COLOR;
++            m.colors_min    = 1;
++            m.colors_max    = 1;
++            m.colors.push_back(HSVToRGB(s.hue, s.saturation, 255));
++            m.color_mode    = s.mono ? MODE_COLORS_MODE_SPECIFIC : MODE_COLORS_RANDOM;
++        }
++
++        modes.push_back(m);
++    }
++
++    controller->ReadCurrentMode(&current_mode);
++
++    active_mode = 0;
++    for(std::size_t i = 0; i < modes.size(); i++)
++    {
++        if(modes[i].value == current_mode)
++        {
++            active_mode = (int)i;
++        }
++    }
++
++    SetupZones();
++}
++
++RGBController_PichauAurum::~RGBController_PichauAurum()
++{
++    Shutdown();
++    delete controller;
++}
++
++void RGBController_PichauAurum::SetupZones()
++{
++    /*-----------------------------------------------------*\
++    | Whole keyboard as one LED until the V80 key map is    |
++    | known (per-key colors need it)                        |
++    \*-----------------------------------------------------*/
++    zone keyboard_zone;
++    keyboard_zone.name          = "Keyboard";
++    keyboard_zone.type          = ZONE_TYPE_SINGLE;
++    keyboard_zone.leds_min      = 1;
++    keyboard_zone.leds_max      = 1;
++    keyboard_zone.leds_count    = 1;
++    zones.push_back(keyboard_zone);
++
++    led keyboard_led;
++    keyboard_led.name           = "Keyboard";
++    leds.push_back(keyboard_led);
++
++    SetupColors();
++}
++
++void RGBController_PichauAurum::DeviceUpdateLEDs()
++{
++    /*-----------------------------------------------------*\
++    | No direct mode; colors are part of each effect        |
++    \*-----------------------------------------------------*/
++}
++
++void RGBController_PichauAurum::DeviceUpdateZoneLEDs(int /*zone*/)
++{
++}
++
++void RGBController_PichauAurum::DeviceUpdateSingleLED(int /*led*/)
++{
++}
++
++void RGBController_PichauAurum::DeviceUpdateMode()
++{
++    const mode&                 m    = modes[active_mode];
++    const PichauAurumModeInfo&  info = mode_info[active_mode];
++    PichauAurumModeSettings     s    = stored[m.value];
++
++    if(m.value != PICHAU_AURUM_MODE_OFF)
++    {
++        unsigned int level  = std::min<unsigned int>(m.brightness, PICHAU_AURUM_BRIGHTNESS_STEPS);
++        s.speed             = (unsigned char)std::min<unsigned int>(m.speed, PICHAU_AURUM_SPEED_MAX);
++        s.brightness        = level == 0 ? 0 : (unsigned char)std::max<long>(1, std::lround(level * (double)PICHAU_AURUM_HW_BRIGHTNESS_MAX / PICHAU_AURUM_BRIGHTNESS_STEPS));
++
++        if(info.single_color && m.color_mode == MODE_COLORS_MODE_SPECIFIC && !m.colors.empty())
++        {
++            unsigned char h, sat, v;
++            RGBToHSV(m.colors[0], &h, &sat, &v);
++            s.mono          = 1;
++            s.hue           = h;
++            s.saturation    = sat;
++            s.value         = (unsigned char)std::lround(v / 255.0 * MonoLevel(info.mono_min, level));
++        }
++        else if(info.single_color)
++        {
++            s.mono          = 0;
++        }
++    }
++
++    stored[m.value] = s;
++    controller->QueueModeSettings(s);
++}
+diff --git a/Controllers/PichauAurumController/RGBController_PichauAurum.h b/Controllers/PichauAurumController/RGBController_PichauAurum.h
+new file mode 100644
+index 0000000..b993ab5
+--- /dev/null
++++ b/Controllers/PichauAurumController/RGBController_PichauAurum.h
+@@ -0,0 +1,32 @@
++/*---------------------------------------------------------*\
++| RGBController_PichauAurum.h                               |
++|                                                           |
++|   RGBController for Pichau Aurum keyboards                |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-3.0-only                   |
++\*---------------------------------------------------------*/
++
++#pragma once
++
++#include "RGBController.h"
++#include "PichauAurumController.h"
++
++class RGBController_PichauAurum : public RGBController
++{
++public:
++    RGBController_PichauAurum(PichauAurumController* controller_ptr);
++    ~RGBController_PichauAurum();
++
++    void        SetupZones();
++
++    void        DeviceUpdateLEDs();
++    void        DeviceUpdateZoneLEDs(int zone);
++    void        DeviceUpdateSingleLED(int led);
++
++    void        DeviceUpdateMode();
++
++private:
++    PichauAurumController*  controller;
++    PichauAurumModeSettings stored[PICHAU_AURUM_MODE_COUNT];
++};
