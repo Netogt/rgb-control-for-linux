@@ -2,6 +2,8 @@
 
 Guia do que foi descoberto e feito para mudar a cor do SSD **XPG Spectrix S20G** no **CachyOS/Arch**, usando uma versão compilada do **OpenRGB** com um detector para o S20G.
 
+> Este detector já faz parte do patch do projeto e o [`instalar.sh`](../instalar.sh) o aplica sozinho. Este guia fica como registro de como o SSD foi feito funcionar e de como reproduzir à mão.
+
 ## Hardware e software usados
 
 | Item | Detalhe |
@@ -48,10 +50,10 @@ sudo nvme list
 ### 2. Instalar dependências
 
 ```bash
-sudo pacman -S --needed base-devel git qt5-base qt5-tools libusb hidapi mbedtls pkgconf
+sudo pacman -S --needed base-devel git qt6-base qt6-tools libusb hidapi mbedtls3 pkgconf
 ```
 
-Se o `qmake` pedir Qt 6, instale `qt6-base qt6-tools` e use `qmake6`.
+O OpenRGB atual precisa do mbedtls 3.x (pacote `mbedtls3`); ele não funciona com o mbedtls 4.
 
 ### 3. Baixar o código (branch `master`)
 
@@ -65,7 +67,7 @@ git submodule update --init --recursive
 
 ### 4. Substituir o detector do Linux
 
-Edite `Controllers/ENESMBusController/XPGSpectrixS40GDetect_Linux.cpp` e troque o conteúdo por:
+O patch do projeto faz esta troca (`git apply ../openrgb-patch/xpg-s20g-pichau-aurum.patch`, no commit `bbc7747`). Para fazer à mão, edite `Controllers/ENESMBusController/XPGSpectrixS40GDetect_Linux.cpp` e troque o conteúdo por:
 
 ```cpp
 /*---------------------------------------------------------*\
@@ -172,7 +174,8 @@ O protocolo, o endereço `0x67` e o resto da lógica continuam idênticos aos do
 ### 5. Compilar
 
 ```bash
-qmake OpenRGB.pro      # ou qmake6
+qmake6 OpenRGB.pro
+rm -rf openrgb.gch     # o qmake invalida os cabeçalhos pré-compilados
 make -j$(nproc)
 ```
 
@@ -200,39 +203,12 @@ sudo ./openrgb --device 2 --mode static --color FF0000
 
 **Resultado: o SSD mudou de cor.** O aviso de udev ("udev rules are not installed") só significa que, sem as regras, dispositivos USB exigem root; não atrapalha rodando com `sudo`.
 
-## Aplicar a cor em todo boot (systemd)
+## Aplicar a cor em todo boot
 
-O SSD volta ao arco-íris quando é desligado da tomada, então o comando precisa rodar na inicialização. **Esta etapa foi apenas proposta e ainda não foi testada.**
+O SSD volta ao arco-íris quando é desligado da tomada, então a cor precisa ser reaplicada a cada inicialização. O RGB Control faz isso com a opção **Reaplicar ao iniciar a sessão**: no login, ele liga o servidor, aplica a cena salva em todos os dispositivos e desliga o servidor. Veja [Uso → Cena inicial](uso.md#cena-inicial) e [Como funciona](funcionamento.md#como-as-cores-voltam-no-login).
 
-```bash
-sudo install -m755 ~/Projetos/rgb/OpenRGB/openrgb /usr/local/bin/openrgb
-
-sudo tee /etc/systemd/system/openrgb-cor.service > /dev/null << 'EOF'
-[Unit]
-Description=Aplicar cor RGB no boot
-After=multi-user.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-Environment=QT_QPA_PLATFORM=offscreen
-ExecStartPre=/bin/sleep 5
-ExecStart=/usr/local/bin/openrgb --mode static --color FF0000
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now openrgb-cor.service
-systemctl status openrgb-cor.service
-```
-
-- Sem `--device`, a cor é aplicada a **todos** os dispositivos detectados (placa, mouse e SSD), o que evita depender do número do dispositivo.
-- A cor é um valor hexadecimal `RRGGBB`. Para mudar, edite o serviço e rode `sudo systemctl restart openrgb-cor.service`.
-- Se algum dispositivo não aceitar o modo `static`, o OpenRGB avisa e segue com os outros. Se a faixa ARGB não acender, normalmente é o tamanho da zona, que se ajusta na interface gráfica.
-- Depois de suspender e voltar, as cores podem se perder; nesse caso dá para criar um serviço que roda ao retomar da suspensão.
-- Até o Linux terminar de iniciar, o SSD ainda mostra o arco-íris. Isso é esperado.
+- Até o login, o SSD ainda mostra o arco-íris. Isso é esperado.
+- Depois de suspender e voltar, as cores podem se perder. Nesse caso, use **Aplicar agora** em Configurações → Cena inicial.
 
 ## Observações e cuidados
 

@@ -5,12 +5,17 @@ App desktop para Linux que controla as cores dos dispositivos RGB do PC, usando 
 - **SSD XPG Spectrix S20G:** detector para o SSD, que usa o mesmo protocolo do S40G (controlador ENE acessado por comandos NVMe).
 - **Teclado Pichau Aurum V80** (USB `36ae:fe9c`): driver novo, feito a partir do protocolo documentado pelo [OpenAurum](https://github.com/its-danilo/openaurum).
 
-O app em si (Tauri 2 + React + Rust) conversa com o servidor do OpenRGB e cuida de:
-- escolher cor e efeito, para o PC todo ou para um dispositivo, zona ou LED;
-- ligar o servidor junto com o app e desligá-lo ao fechar;
-- reaplicar as cores ao iniciar a sessão.
-
 > Projeto pessoal, testado só no hardware abaixo e sem suporte. O detector do SSD envia comandos NVMe e o driver do teclado grava na memória dele. Use por sua conta e risco.
+
+## Funcionalidades
+
+- **Cor:** seletor com HEX e RGB, favoritas, cores recentes e prévia ao vivo enquanto você arrasta.
+- **Onde aplicar:** em todos os dispositivos de uma vez, num dispositivo, numa zona ou em LEDs específicos.
+- **Efeitos:** os de cada dispositivo (estático, respiração, arco-íris etc.), com velocidade, brilho, direção e cores do efeito.
+- **Fitas ARGB:** ajuste do número de LEDs das fitas nos pinos da placa-mãe.
+- **Servidor automático:** o servidor OpenRGB abre e fecha junto com o app, sem pedir senha, ou fica sempre ligado.
+- **Cores no boot:** reaplica as cores salvas a cada login, sem abrir a janela.
+- **Tema:** segue o tema claro ou escuro do sistema.
 
 ## Hardware testado
 
@@ -22,7 +27,9 @@ O app em si (Tauri 2 + React + Rust) conversa com o servidor do OpenRGB e cuida 
 | Mouse | Redragon M711 Cobra |
 | Sistema | CachyOS |
 
-## Instalação (CachyOS/Arch)
+Outros dispositivos suportados pelo OpenRGB também devem funcionar.
+
+## Instalação rápida (CachyOS/Arch)
 
 ```sh
 git clone https://github.com/Netogt/NOME_DO_REPOSITORIO.git ~/Projetos/rgb
@@ -30,32 +37,36 @@ cd ~/Projetos/rgb
 ./instalar.sh
 ```
 
-O script:
-1. instala as dependências com `pacman`;
-2. baixa o OpenRGB na versão usada (commit `bbc7747`) e aplica `openrgb-patch/xpg-s20g-pichau-aurum.patch`;
-3. compila o OpenRGB e o instala em `/usr/local/bin/openrgb`;
-4. compila o app e o instala em `~/.local/bin/rgb-control`, com atalho no menu.
+Depois, abra o **RGB Control** pelo menu e faça a [primeira configuração](docs/instalacao.md#primeira-configuração):
+1. servidor "Junto com o app";
+2. tamanho das fitas ARGB;
+3. cena inicial.
 
-Depois, no app:
-1. **Configurações → Como o servidor roda → "Junto com o app"**. Isso instala o serviço `openrgb-server` e uma regra do polkit que deixa o seu usuário ligá-lo e desligá-lo sem senha.
-2. Fitas ARGB da placa-mãe: ajuste o número de LEDs no painel **Área**.
-3. Em **Cena inicial**, clique em **Salvar estado atual** e ative **Reaplicar ao iniciar a sessão**. O SSD volta ao arco-íris quando o PC fica sem energia, e assim as cores voltam sozinhas a cada login.
+## Documentação
 
-Se o teclado parar de responder depois de trocar de efeito, adicione `usbhid.quirks=0x36ae:0xfe9c:0x400` aos parâmetros do kernel.
+| Documento | Conteúdo |
+|---|---|
+| [Instalação](docs/instalacao.md) | O que o script faz, primeira configuração, atualização, desinstalação e instalação manual |
+| [Uso](docs/uso.md) | Todas as telas e funções do app |
+| [Como funciona](docs/funcionamento.md) | Arquitetura, protocolo, serviço, autostart e configuração |
+| [Teclado Pichau Aurum](docs/teclado-pichau-aurum.md) | Efeitos, protocolo USB e detalhes do driver |
+| [SSD XPG Spectrix S20G](docs/ssd-xpg-s20g.md) | Como o SSD foi feito funcionar no OpenRGB |
+| [Solução de problemas](docs/problemas.md) | Conexão, dispositivos, fitas ARGB, autostart e compilação |
+| [Desenvolvimento](docs/desenvolvimento.md) | Modo de desenvolvimento, testes, patch e atualização do OpenRGB |
 
 ## Estrutura
 
 | Caminho | Conteúdo |
 |---|---|
-| [`rgb-control/`](rgb-control/) | O app (detalhes no [README dele](rgb-control/README.md)) |
+| [`rgb-control/`](rgb-control/) | O app: interface em `src/`, núcleo em Rust em `src-tauri/` |
 | [`openrgb-patch/`](openrgb-patch/) | As modificações no OpenRGB, em formato de patch |
 | [`instalar.sh`](instalar.sh) | Instalação e atualização |
-| [`controlar-rgb-xpg-s20g-linux.md`](controlar-rgb-xpg-s20g-linux.md) | Como o SSD foi feito funcionar no OpenRGB |
+| [`docs/`](docs/) | Documentação |
 
 ## Licença
 
-- **App (`rgb-control/`) e scripts:** GPL-3.0-or-later. Veja [LICENSE](LICENSE).
-- **Patch do OpenRGB:** o OpenRGB é GPL-2.0-or-later. O detector do SSD mantém essa licença. O driver do teclado é GPL-3.0, por seguir o protocolo do OpenAurum, que é GPL-3.0. Por isso, o OpenRGB compilado com o patch é distribuído sob a GPL-3.0.
+- **App (`rgb-control/`), scripts e documentação:** GPL-3.0-or-later. Veja [LICENSE](LICENSE).
+- **Patch do OpenRGB:** o OpenRGB é GPL-2.0-or-later, e o detector do SSD mantém essa licença. O driver do teclado é GPL-3.0, por seguir o protocolo do OpenAurum, que é GPL-3.0. Por isso, o OpenRGB compilado com o patch é distribuído sob a GPL-3.0.
 
 ## Créditos
 
